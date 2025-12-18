@@ -4,7 +4,8 @@ module EX(
     input wire rst,
     // input wire flush,
     input wire [`StallBus-1:0] stall,
-    
+    input wire [31:0] lo_data,
+    input wire [31:0] hi_data,
 
     input wire [`ID_TO_EX_WD-1:0] id_to_ex_bus,
 
@@ -16,12 +17,16 @@ module EX(
     output wire [3:0] data_sram_wen,
     output wire [31:0] data_sram_addr,
     output wire [31:0] data_sram_wdata,
-    output wire [`EX_TO_RF_WD-1:0] ex_to_rf_bus       //前推线路
+    output wire [65:0] ex_hilo_bus, // EX段的HILO寄存器输出
+    output wire stallreq_for_ex, // EX段的暂停请求
+    output wire [`EX_TO_RF_WD-1:0] ex_to_rf_bus   // EX前推到RF，同ID
 );
 
     reg [`ID_TO_EX_WD-1:0] id_to_ex_bus_r;
 
-    always @ (posedge clk) begin        //和ID一样，在开始时先将ID段传来的信息锁到寄存器里,在下一个周期取寄存器中的内容执行
+    always @ (posedge clk) begin        //和ID段执行的功能一样
+                                        //在开始时先将ID段传来的信息锁存
+                                        //在下一个周期取寄存器中的内容 并且执行
         if (rst) begin
             id_to_ex_bus_r <= `ID_TO_EX_WD'b0;
         end
@@ -47,9 +52,26 @@ module EX(
     wire sel_rf_res;
     wire [31:0] rf_rdata1, rf_rdata2;
     reg is_in_delayslot;
-    wire [7:0] mem_op;
-
-    assign {            //将信息进行解包
+    wire [8:0] hilo_op;
+    wire [7:0] mem_op;//访存操作编码
+    /*
+     位[7]: inst_lb  - 加载字节（Load Byte，有符号扩展）
+     位[6]: inst_lbu - 加载字节无符号（Load Byte Unsigned，零扩展）  
+     位[5]: inst_lh  - 加载半字（Load Halfword，有符号扩展）
+     位[4]: inst_lhu - 加载半字无符号（Load Halfword Unsigned，零扩展）
+     位[3]: inst_lw  - 加载字（Load Word，32位）
+     位[2]: inst_sb  - 存储字节（Store Byte）
+     位[1]: inst_sh  - 存储半字（Store Halfword）
+     位[0]: inst_sw  - 存储字（Store Word）
+     需要传递mem_op给MEM段->MEM段需要根据mem_op决定如何处读回的数据
+     lb：字节读取+有符号扩展到32位
+     lbu：字节读取+零扩展到32位
+     lh：半字读取+有符号扩展
+     lhu：半字读取+零扩展
+     lw：直接读取32位
+    */
+    assign {            //总线解包
+        hilo_op,        
         mem_op,
         ex_pc,          // 148:117
         inst,           // 116:85
@@ -65,31 +87,49 @@ module EX(
         rf_rdata2          // 31:0
     } = id_to_ex_bus_r;
 
-
-    //alu运算单元
+    //ALU运算单元
+    //立即数扩展
     wire [31:0] imm_sign_extend, imm_zero_extend, sa_zero_extend;
-    assign imm_sign_extend = {{16{inst[15]}},inst[15:0]};
-    assign imm_zero_extend = {16'b0, inst[15:0]};
-    assign sa_zero_extend = {27'b0,inst[10:6]};
-
+    assign imm_sign_extend = {{16{inst[15]}},inst[15:0]}; // 16位有符号扩展
+    assign imm_zero_extend = {16'b0, inst[15:0]}; // 16位零扩展
+    assign sa_zero_extend = {27'b0,inst[10:6]}; // 移位位数（5位）
+    /*
+    有符号扩展：用于算术指令的立即数
+    零扩展：用于逻辑指令的立即数
+    移位扩展：专门用于移位指令的shamt字段
+    */
+ 
+    //ALU源操作数选择逻辑
     wire [31:0] alu_src1, alu_src2;
-    wire [31:0] alu_result, ex_result;
-
+    wire [31:0] alu_result, ex_result,hilo_result;
+    wire [65:0] hilo_bus;
     assign alu_src1 = sel_alu_src1[1] ? ex_pc :
                       sel_alu_src1[2] ? sa_zero_extend : rf_rdata1;
+                      /*
+                      sel_alu_src1[1]=1：选择PC（jal等跳转链接指令）
+                      sel_alu_src1[2]=1：选择移位位数（移位指令）
+                      默认：选择rf_rdata1（普通算术逻辑指令）
+                      */
 
     assign alu_src2 = sel_alu_src2[1] ? imm_sign_extend :
                       sel_alu_src2[2] ? 32'd8 :
-                      sel_alu_src2[3] ? imm_zero_extend : rf_rdata2;
+                      sel_alu_src2[3] ? imm_zero_extend : rf_rdata2;、
+                      /*
+                      sel_alu_src2[1]=1：选择有符号扩展的立即数（算术指令）
+                      sel_alu_src2[2]=1：选择常数8（jal指令 PC+8）
+                      sel_alu_src2[3]=1：选择零扩展的立即数（逻辑指令）
+                      默认：选择rf_rdata2（普通算术逻辑指令）
+                      */
     
+    //ALU单元实例化
     alu u_alu(
     	.alu_control (alu_op ),
         .alu_src1    (alu_src1    ),
         .alu_src2    (alu_src2    ),
         .alu_result  (alu_result  )
     );
-    //这里和书上讲的有点不太一样，书上的访存请求是MEM段发出的，而这里的访存请求是EX段发出的
-    //load & store（to do）
+
+    //访存指令译码
     wire inst_lb, inst_lbu,  inst_lh, inst_lhu, inst_lw;
     wire inst_sb, inst_sh,   inst_sw;
 
@@ -113,27 +153,23 @@ module EX(
                              inst_sb ? {4{rf_rdata2[7:0]}} :
                              inst_sh ? {2{rf_rdata2[15:0]}}:
                              32'b0;
-                           
 
-
-
-    assign ex_result = alu_result;
-
-    assign ex_to_mem_bus = {        //将EX段封装成一条总线
+    assign ex_to_mem_bus = {   //将EX段封装成总线
+        hilo_bus,       
         mem_op,         // 87:80
-        ex_pc,          // 79:48
+        ex_pc,          // 79:48 当前指令的程序计数器值
         data_ram_en,    // 47
         data_ram_wen,   // 46:43
-//        data_ram_sel,   // 42:39
-        sel_rf_res,     // 38
-        rf_we,          // 37
-        rf_waddr,       // 36:32
-        ex_result       // 31:0
+     // data_ram_sel,   // 42:39
+        sel_rf_res,     // 38 结果选择信号，0：ALU结果，1：访存数据
+        rf_we,          // 37 寄存写使能
+        rf_waddr,       // 36:32 寄存器写地址
+        ex_result       // 31:0 ALU计算结果
     };
     
-    assign memop_from_ex = mem_op;
-
-    //forwarding线路，解决数据相关的
+    assign memop_from_ex = mem_op; //传递访存操作编码给MEM段
+   
+    //前推到RF的总线
     assign ex_to_rf_bus = {
         // hilo_bus,
         rf_we,
@@ -149,14 +185,13 @@ module EX(
     	.clk        (clk            ),
         .resetn     (~rst           ),
         .mul_signed (mul_signed     ),
-        .ina        (      ), // 乘法源操作数1
-        .inb        (      ), // 乘法源操作数2
+        .ina        (rf_rdata1      ), // 乘法源操作数1
+        .inb        (rf_rdata2      ), // 乘法源操作数2
         .result     (mul_result     ) // 乘法结果 64bit
     );
 
     // DIV part
     wire [63:0] div_result;
-    wire inst_div, inst_divu;
     wire div_ready_i;
     reg stallreq_for_div;
     assign stallreq_for_ex = stallreq_for_div;
@@ -246,6 +281,50 @@ module EX(
     end
 
     // mul_result 和 div_result 可以直接使用
+    //HILO part
+    wire inst_mfhi, inst_mflo,  inst_mthi,  inst_mtlo;
+    wire inst_mult, inst_multu, inst_div,   inst_divu;
+    wire inst_mul;
+
+    assign {
+        inst_mfhi, inst_mflo, inst_mthi, inst_mtlo,
+        inst_mult, inst_multu, inst_div, inst_divu,
+        inst_mul
+    } = hilo_op;
+
+    wire hi_we,lo_we;
+    wire [31:0] hi_result, lo_result;
     
+    wire op_div = inst_div | inst_divu;
+    wire op_mul = inst_mult | inst_multu;
+
+    assign hi_we = inst_mthi | inst_div | inst_divu | inst_mult | inst_multu;
+    assign lo_we = inst_mtlo | inst_div | inst_divu | inst_mult | inst_multu;
+
+    assign hi_result = inst_mthi ? rf_rdata1
+                      :op_mul    ? mul_result[63:32]
+                      :op_div    ? div_result[63:32]
+                      :32'b0;
+
+    assign lo_result = inst_mtlo ? rf_rdata1
+                      :op_mul    ? mul_result[31:0]
+                      :op_div    ? div_result[31:0]
+                      :32'b0;
+    
+    assign hilo_result = inst_mfhi ? hi_data:
+                         inst_mflo ? lo_data:
+                         32'b0;
+
+    assign ex_result = (inst_mfhi | inst_mflo) ? hilo_result :alu_result;
+
+    assign hilo_bus = {
+        hi_we,
+        lo_we,
+        hi_result,
+        lo_result
+    };
+
+    assign ex_hilo_bus = hilo_bus;
+
     
 endmodule
