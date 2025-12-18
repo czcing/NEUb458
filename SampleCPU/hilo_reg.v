@@ -4,10 +4,8 @@ module hilo_reg(
     input wire rst,
     input wire [`StallBus-1:0] stall,
 
-
     input wire [65:0] ex_hilo_bus,
     input wire [65:0] mem_hilo_bus,
-
 
     input wire [65:0] hilo_bus,
 
@@ -66,19 +64,17 @@ module hilo_reg(
     end
 
     wire [31:0] hi_temp, lo_temp;
-
+    
     assign hi_temp = ex_hi_we  ? ex_hi_in
                    : mem_hi_we ? mem_hi_in
                    : wb_hi_we  ? wb_hi_in
                    : reg_hi;
-
 //    assign hi_data = (stall[2]==`NoStop) ? hi_temp : 32'b0;
-
+    
     assign lo_temp = ex_lo_we  ? ex_lo_in
                    : mem_lo_we ? mem_lo_in
                    : wb_lo_we  ? wb_lo_in
                    : reg_lo;
-
 //    assign lo_data = (stall[2]==`NoStop) ? lo_temp : 32'b0;
 
      always @ (posedge clk) begin
