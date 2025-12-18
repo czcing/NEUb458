@@ -10,12 +10,12 @@ module MEM(
 
     output wire [65:0] mem_hilo_bus,
     output wire [`MEM_TO_WB_WD-1:0] mem_to_wb_bus,
-    output wire [`MEM_TO_RF_WD-1:0] mem_to_rf_bus
+    output wire [`MEM_TO_RF_WD-1:0] mem_to_rf_bus       //前推线路
 );
 
     reg [`EX_TO_MEM_WD-1:0] ex_to_mem_bus_r; //流水线寄存器 保存EX并传给MEM
 
-    always @ (posedge clk) begin 
+    always @ (posedge clk) begin
         if (rst) begin
             ex_to_mem_bus_r <= `EX_TO_MEM_WD'b0;
         end
@@ -40,15 +40,16 @@ module MEM(
     wire [31:0] rf_wdata;
     wire [31:0] ex_result;
     wire [31:0] mem_result;
-    wire [65:0] hilo_bus;
     wire [7:0] mem_op;
+    wire [65:0] hilo_bus;
+
     assign {
         hilo_bus,
         mem_op,
         mem_pc,          // 79:48
         data_ram_en,    // 47
         data_ram_wen,   // 46:43
-     // data_ram_sel,   // 42:39
+        //data_ram_sel,   // 42:39
         sel_rf_res,     // 38
         rf_we,          // 37
         rf_waddr,       // 36:32
@@ -63,23 +64,30 @@ module MEM(
         inst_lw, inst_sb,  inst_sh, inst_sw
     } = mem_op;
 
-
     //访存数据处理
     assign mem_result = //lw指令：直接使用32位数据
                         inst_lw ? data_sram_rdata:
                         //lb指令：字节加载+有符号扩展
-                        inst_lb  & ex_result[1:0]==2'b00 ? {{24{data_sram_rdata[7]}},data_sram_rdata[7:0]}: inst_lb  & ex_result[1:0]==2'b01 ? {{24{data_sram_rdata[15]}},data_sram_rdata[15:8]}:inst_lb  & ex_result[1:0]==2'b10 ? {{24{data_sram_rdata[23]}},data_sram_rdata[23:16]}:inst_lb  & ex_result[1:0]==2'b11 ? {{24{data_sram_rdata[31]}},data_sram_rdata[31:24]}:
+                        inst_lb  & ex_result[1:0]==2'b00 ? {{24{data_sram_rdata[7]}},data_sram_rdata[7:0]}:
+                        inst_lb  & ex_result[1:0]==2'b01 ? {{24{data_sram_rdata[15]}},data_sram_rdata[15:8]}:
+                        inst_lb  & ex_result[1:0]==2'b10 ? {{24{data_sram_rdata[23]}},data_sram_rdata[23:16]}:
+                        inst_lb  & ex_result[1:0]==2'b11 ? {{24{data_sram_rdata[31]}},data_sram_rdata[31:24]}:
                         //lbu指令：字节加载+零扩展
-                        inst_lbu & ex_result[1:0]==2'b00 ? {{24{1'b0}},data_sram_rdata[7:0]}: inst_lbu & ex_result[1:0]==2'b01 ? {{24{1'b0}},data_sram_rdata[15:8]}:inst_lbu & ex_result[1:0]==2'b10 ? {{24{1'b0}},data_sram_rdata[23:16]}:inst_lbu & ex_result[1:0]==2'b11 ? {{24{1'b0}},data_sram_rdata[31:24]}:
+                        inst_lbu & ex_result[1:0]==2'b00 ? {{24{1'b0}},data_sram_rdata[7:0]}:
+                        inst_lbu & ex_result[1:0]==2'b01 ? {{24{1'b0}},data_sram_rdata[15:8]}:
+                        inst_lbu & ex_result[1:0]==2'b10 ? {{24{1'b0}},data_sram_rdata[23:16]}:
+                        inst_lbu & ex_result[1:0]==2'b11 ? {{24{1'b0}},data_sram_rdata[31:24]}:
                         //lh指令：半字加载+有符号扩展（对齐到2字节）
-                        inst_lh  & ex_result[1:0]==2'b00 ? {{16{data_sram_rdata[15]}},data_sram_rdata[15:0]}: inst_lh  & ex_result[1:0]==2'b10 ? {{16{data_sram_rdata[31]}},data_sram_rdata[31:16]}:
+                        inst_lh  & ex_result[1:0]==2'b00 ? {{16{data_sram_rdata[15]}},data_sram_rdata[15:0]}:
+                        inst_lh  & ex_result[1:0]==2'b10 ? {{16{data_sram_rdata[31]}},data_sram_rdata[31:16]}:
                         //lhu指令：半字加载+零扩展
-                        inst_lhu & ex_result[1:0]==2'b00 ? {{16{1'b0}},data_sram_rdata[15:0]}: inst_lhu & ex_result[1:0]==2'b10 ? {{16{1'b0}},data_sram_rdata[31:16]}:
+                        inst_lhu & ex_result[1:0]==2'b00 ? {{16{1'b0}},data_sram_rdata[15:0]}:
+                        inst_lhu & ex_result[1:0]==2'b10 ? {{16{1'b0}},data_sram_rdata[31:16]}:
                         //default
                         32'b0;
 
 
-    assign rf_wdata = sel_rf_res & data_ram_en ? mem_result : ex_result;//写回数据选择
+    assign rf_wdata = sel_rf_res & data_ram_en ? mem_result : ex_result;
     /*
     等效于
     if (sel_rf_res == 1 && data_ram_en == 1) begin
@@ -101,6 +109,8 @@ module MEM(
         rf_wdata    // 31:0
     };
 
+    assign mem_hilo_bus = hilo_bus;
+
     //前推总线 在ID段解包
     assign mem_to_rf_bus = {
         // hilo_bus,
@@ -108,6 +118,6 @@ module MEM(
         rf_waddr,
         rf_wdata
     };
-    assign mem_hilo_bus =  hilo_bus;
+
 
 endmodule
