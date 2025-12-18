@@ -1,8 +1,8 @@
 `include "lib/defines.vh"
-module mycpu_core(          //上课所说的流水线中的连线就是在这部分实现
+module mycpu_core(   
     input wire clk,
     input wire rst,
-    input wire [5:0] int,
+    input wire [5:0] int,      //连线
 
     output wire inst_sram_en,
     output wire [3:0] inst_sram_wen,
@@ -21,25 +21,37 @@ module mycpu_core(          //上课所说的流水线中的连线就是在这�
     output wire [4:0] debug_wb_rf_wnum,
     output wire [31:0] debug_wb_rf_wdata
 );
+    //级间数据总线 
     wire [`IF_TO_ID_WD-1:0] if_to_id_bus;
     wire [`ID_TO_EX_WD-1:0] id_to_ex_bus;
     wire [`EX_TO_MEM_WD-1:0] ex_to_mem_bus;
     wire [`MEM_TO_WB_WD-1:0] mem_to_wb_bus;
-    wire [`BR_WD-1:0] br_bus;           //跳转指令
-    wire [`DATA_SRAM_WD-1:0] ex_dt_sram_bus;
-    wire [`WB_TO_RF_WD-1:0] wb_to_rf_bus;       //..._to_rf_bus即为数据通路，是用来进行forwarding解决RAW数据相关的
-    wire [`EX_TO_RF_WD-1:0] ex_to_rf_bus; //ex段前向的信息
-    wire [`MEM_TO_RF_WD-1:0] mem_to_rf_bus; //mem段前向的信息
-    wire [`StallBus-1:0] stall;
-    wire [7:0] memop_from_ex;
-    wire stallreq;
-
+    //跳转指令
+    wire [`BR_WD-1:0] br_bus;  
+    //前推总线
+    wire [`WB_TO_RF_WD-1:0] wb_to_rf_bus; 
+    wire [`EX_TO_RF_WD-1:0] ex_to_rf_bus; 
+    wire [`MEM_TO_RF_WD-1:0] mem_to_rf_bus;
+    //hilo总线
+    wire [65:0] ex_hilo_bus;
+    wire [65:0] mem_hilo_bus; 
+    //控制信号 
+    wire [`StallBus-1:0] stall; //暂停控制
+    wire [7:0] memop_from_ex; //ex段访存类型
+    wire stallreq; //暂停请求
+    wire stallreq_ex; //来自EX段的暂停请求
+    wire [31:0] hi_data, lo_data;
+    wire [65:0] hilo_bus;
     IF u_IF(
+        //基本信号
     	.clk             (clk             ),
         .rst             (rst             ),
         .stall           (stall           ),
+        //输入来自ID的跳转信息
         .br_bus          (br_bus          ),
-        .if_to_id_bus    (if_to_id_bus    ),            //例如这里if_to_id_bus是IF段的输出
+        //输出到ID的信息
+        .if_to_id_bus    (if_to_id_bus    ),  
+        //指令SRAM的接口
         .inst_sram_en    (inst_sram_en    ),
         .inst_sram_wen   (inst_sram_wen   ),
         .inst_sram_addr  (inst_sram_addr  ),
@@ -51,16 +63,19 @@ module mycpu_core(          //上课所说的流水线中的连线就是在这�
     	.clk             (clk             ),
         .rst             (rst             ),
         .stall           (stall           ),
+        //控制信号输入
         .stallreq_for_load  (stallreq     ),
         .memop_from_ex   (memop_from_ex   ),
-//        .ex_ram_read     (ex_to_mem_bus[38]),
-//        .stall_for_load  (stall_for_load  ),
-        .if_to_id_bus    (if_to_id_bus    ),            //而if_to_id_bus作为ID段的输入,即为连线
+        //来自IF段的输入 体现了连线
+        .if_to_id_bus    (if_to_id_bus    ), 
         .inst_sram_rdata (inst_sram_rdata ),
+        //前递数据输入
         .wb_to_rf_bus    (wb_to_rf_bus    ),
         .ex_to_rf_bus    (ex_to_rf_bus    ),
         .mem_to_rf_bus   (mem_to_rf_bus   ),
+        //输出传递给EX段
         .id_to_ex_bus    (id_to_ex_bus    ),
+        //输出传递给IF段的跳转信息
         .br_bus          (br_bus          )
     );
 
@@ -68,13 +83,20 @@ module mycpu_core(          //上课所说的流水线中的连线就是在这�
     	.clk             (clk             ),
         .rst             (rst             ),
         .stall           (stall           ),
+
         .id_to_ex_bus    (id_to_ex_bus    ),
         .ex_to_mem_bus   (ex_to_mem_bus   ),
+
         .memop_from_ex   (memop_from_ex   ),
+        .ex_hilo_bus     (ex_hilo_bus     ),
+        .stallreq_for_ex (stallreq_ex     ),
+        .hi_data         (hi_data         ),
+        .lo_data         (lo_data         ),
         .data_sram_en    (data_sram_en    ),
         .data_sram_wen   (data_sram_wen   ),
         .data_sram_addr  (data_sram_addr  ),
         .data_sram_wdata (data_sram_wdata ),
+
         .ex_to_rf_bus    (ex_to_rf_bus    )
     );
 
@@ -82,8 +104,11 @@ module mycpu_core(          //上课所说的流水线中的连线就是在这�
     	.clk             (clk             ),
         .rst             (rst             ),
         .stall           (stall           ),
+
         .ex_to_mem_bus   (ex_to_mem_bus   ),
+        .mem_hilo_bus    (mem_hilo_bus    ),
         .data_sram_rdata (data_sram_rdata ),
+
         .mem_to_wb_bus   (mem_to_wb_bus   ),
         .mem_to_rf_bus   (mem_to_rf_bus   )
     );
@@ -92,8 +117,10 @@ module mycpu_core(          //上课所说的流水线中的连线就是在这�
     	.clk               (clk               ),
         .rst               (rst               ),
         .stall             (stall             ),
+
         .mem_to_wb_bus     (mem_to_wb_bus     ),
         .wb_to_rf_bus      (wb_to_rf_bus      ),
+        .hilo_bus          (hilo_bus          ),
         .debug_wb_pc       (debug_wb_pc       ),
         .debug_wb_rf_wen   (debug_wb_rf_wen   ),
         .debug_wb_rf_wnum  (debug_wb_rf_wnum  ),
@@ -103,7 +130,19 @@ module mycpu_core(          //上课所说的流水线中的连线就是在这�
     CTRL u_CTRL(
     	.rst               (rst               ),
     	.stallreq_for_load (stallreq          ),
+        .stallreq_for_ex   (stallreq_ex       ),
         .stall             (stall             )
+    );
+
+     hilo_reg u_hilo_reg(
+        .clk                (clk                   ),
+        .rst                (rst                   ),
+        .stall              (stall                 ),
+        .ex_hilo_bus        (ex_hilo_bus           ),
+        .mem_hilo_bus       (mem_hilo_bus          ),
+        .hilo_bus           (hilo_bus              ),
+        .hi_data            (hi_data               ),
+        .lo_data            (lo_data               )
     );
     
 endmodule
