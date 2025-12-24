@@ -2,29 +2,21 @@
 module WB(
     input wire clk,
     input wire rst,
-    // input wire flush,
-    input wire [`StallBus-1:0] stall,
-
+    input wire [`StallBus-1:0] stall,、
     input wire [`MEM_TO_WB_WD-1:0] mem_to_wb_bus,
-
     output wire [`WB_TO_RF_WD-1:0] wb_to_rf_bus,
     output wire [65:0] hilo_bus, 
-
     output wire [31:0] debug_wb_pc,
     output wire [3:0] debug_wb_rf_wen,
     output wire [4:0] debug_wb_rf_wnum,
     output wire [31:0] debug_wb_rf_wdata 
 );
-
-    reg [`MEM_TO_WB_WD-1:0] mem_to_wb_bus_r;//流水线寄存器
+    reg [`MEM_TO_WB_WD-1:0] mem_to_wb_bus_r;
 
     always @ (posedge clk) begin
         if (rst) begin
             mem_to_wb_bus_r <= `MEM_TO_WB_WD'b0;
         end
-        // else if (flush) begin
-        //     mem_to_wb_bus_r <= `MEM_TO_WB_WD'b0;
-        // end
         else if (stall[4]==`Stop && stall[5]==`NoStop) begin
             mem_to_wb_bus_r <= `MEM_TO_WB_WD'b0;
         end
@@ -32,7 +24,6 @@ module WB(
             mem_to_wb_bus_r <= mem_to_wb_bus;
         end
     end
-
     wire [31:0] wb_pc;
     wire rf_we;
     wire [4:0] rf_waddr;
